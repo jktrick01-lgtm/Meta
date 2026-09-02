@@ -15,9 +15,12 @@ import shutil
 import subprocess
 import urllib.parse
 import csv
+import base64
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
+from cryptography.fernet import Fernet, InvalidToken
 
 from telegram import (
     Update,
@@ -80,6 +83,8 @@ ADMIN_IDS = {
 DB_PATH = Path(
     os.getenv("DATABASE_PATH", "bot_data.db")
 )
+if BROADCAST_MODE:
+    DB_PATH = BROADCAST_DB_PATH
 
 BACKUP_DIR = Path(
     os.getenv("BACKUP_DIR", ".")
@@ -90,16 +95,49 @@ PERSISTENCE_PATH = Path(
 )
 
 # ============================================================
+# TOKEN ENCRYPTION
+# ============================================================
+
+def encrypt_token(token):
+    token = (token or "").strip()
+    if not token:
+        return ""
+    return TOKEN_CIPHER.encrypt(token.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_token(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        return TOKEN_CIPHER.decrypt(value.encode("utf-8")).decode("utf-8")
+    except (InvalidToken, ValueError, TypeError):
+        logger.error("Stored bot token could not be decrypted.")
+        return ""
+
+
+# ============================================================
 # CLONE / MULTI-BOT MANAGER
 # ============================================================
 CLONE_MODE = os.getenv("CLONE_MODE", "0") == "1"
+BROADCAST_MODE = os.getenv("BROADCAST_MODE", "0") == "1"
 CLONE_DB_DIR = Path(os.getenv("CLONE_DB_DIR", "child_data"))
 CLONE_DB_DIR.mkdir(parents=True, exist_ok=True)
 try:
-    MAX_CLONES = max(1, int(os.getenv("MAX_CLONES", "20")))
+    MAX_CLONES = max(1, int(os.getenv("MAX_CLONES", "50")))
 except (TypeError, ValueError):
-    MAX_CLONES = 20
+    MAX_CLONES = 50
 CLONE_PROCESSES = {}
+BROADCAST_DB_PATH = Path(os.getenv("BROADCAST_DB_PATH", str(CLONE_DB_DIR / "broadcast_bot.db")))
+
+# Stable encryption key shared by the main/clone/broadcast child processes.
+# Prefer explicitly setting TOKEN_ENCRYPTION_KEY in Render. When absent, derive
+# a stable Fernet key from the primary bot token so restarts keep stored tokens
+# decryptable without adding another mandatory secret.
+_raw_crypto_secret = os.getenv("TOKEN_ENCRYPTION_KEY", "").strip() or BOT_TOKEN
+_crypto_seed = hashlib.sha256(_raw_crypto_secret.encode("utf-8")).digest()
+TOKEN_ENCRYPTION_KEY = base64.urlsafe_b64encode(_crypto_seed)
+TOKEN_CIPHER = Fernet(TOKEN_ENCRYPTION_KEY)
 
 if not BOT_TOKEN:
     raise SystemExit(
@@ -331,6 +369,41 @@ SCHEMA = [
         pid INTEGER,
         created_at TEXT NOT NULL,
         last_error TEXT
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS clone_creators (
+        user_id INTEGER PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        max_bots INTEGER NOT NULL DEFAULT 1,
+        granted_by INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS broadcast_bot_config (
+        id INTEGER PRIMARY KEY CHECK(id=1),
+        bot_id INTEGER,
+        username TEXT,
+        display_name TEXT,
+        encrypted_token TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS broadcast_subscribers (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        started_at TEXT NOT NULL,
+        last_seen TEXT NOT NULL
     )
     """,
 
@@ -689,6 +762,8 @@ def clone_copy_configuration(source_path, target_path, admin_id):
             "INSERT OR REPLACE INTO admins(user_id,enabled,added_at) VALUES(?,?,?)",
             (int(admin_id), 1, utc_now()),
         )
+        target.execute("INSERT INTO settings(key,value) VALUES('broadcast_member_alert_enabled','1') "
+                       "ON CONFLICT(key) DO NOTHING")
         target.commit()
     finally:
         target.close()
@@ -700,11 +775,35 @@ def clone_count():
     return int(row["c"]) if row else 0
 
 
+def creator_permission(user_id):
+    row = db_one(
+        "SELECT * FROM clone_creators WHERE user_id=? AND enabled=1",
+        (int(user_id),),
+    )
+    return row
+
+
+def creator_used_bots(user_id):
+    row = db_one(
+        "SELECT COUNT(*) AS c FROM child_bots WHERE created_by=?",
+        (int(user_id),),
+    )
+    return int(row["c"]) if row else 0
+
+
+def can_create_clone(user_id):
+    if int(user_id) in ADMIN_IDS:
+        return True, 10**9, creator_used_bots(user_id)
+    row = creator_permission(user_id)
+    if not row:
+        return False, 0, creator_used_bots(user_id)
+    used = creator_used_bots(user_id)
+    allowed = int(row["max_bots"])
+    return used < allowed, allowed, used
+
+
 def clone_owner_or_creator(user_id):
-    if user_id in ADMIN_IDS:
-        return True
-    row = db_one("SELECT enabled FROM admins WHERE user_id=?", (user_id,))
-    return bool(row and row["enabled"])
+    return int(user_id) in ADMIN_IDS or bool(creator_permission(user_id))
 
 
 async def validate_clone_token(token):
@@ -719,9 +818,9 @@ async def validate_clone_token(token):
             raise ValueError("That token does not belong to a bot.")
         return me
     except (NetworkError, TimedOut) as exc:
-        raise ValueError(f"Telegram unreachable: {str(exc)[:200]}") from exc
+        raise ValueError(f"Telegram is temporarily unreachable. Try again.") from exc
     except TelegramError as exc:
-        raise ValueError(f"Telegram rejected the token: {str(exc)[:300]}") from exc
+        raise ValueError(f"Telegram rejected this token: {str(exc)[:220]}") from exc
     finally:
         try:
             await bot.shutdown()
@@ -729,20 +828,69 @@ async def validate_clone_token(token):
             pass
 
 
+async def _safe_delete_message(message):
+    if not message:
+        return
+    try:
+        await message.delete()
+    except TelegramError:
+        pass
+
+
+async def _clone_prompt(update, context, text):
+    previous = context.user_data.get("clone_prompt_message_id")
+    if previous and update.effective_chat:
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=int(previous),
+            )
+        except TelegramError:
+            pass
+    msg = await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [create_button("❌ Cancel", "CALLBACK", callback="clone:cancel", style="danger")]
+        ]),
+    )
+    context.user_data["clone_prompt_message_id"] = msg.message_id
+    return msg
+
+
 async def clone_command(update, context):
-    if CLONE_MODE:
+    if CLONE_MODE or BROADCAST_MODE:
         return
     user = update.effective_user
-    if not user or update.effective_chat.type != "private":
+    if not user or not update.effective_chat or update.effective_chat.type != "private":
         return
+
+    allowed, limit, used = can_create_clone(user.id)
+    if not allowed:
+        if limit:
+            await update.message.reply_text(
+                f"🔒 Clone permission required.\n\n"
+                f"You have permission for {limit} bot(s).\n"
+                f"Used: {used}/{limit}\n\n"
+                f"Ask the Owner to grant or increase your clone permission."
+            )
+        else:
+            await update.message.reply_text(
+                "🔒 You do not have permission to create a clone bot.\n\n"
+                "Only users approved by the Owner can create clone bots."
+            )
+        return
+
     context.user_data.clear()
     context.user_data["clone_state"] = "token"
-    await update.message.reply_text(
-        "🤖 CLONE BOT\n\n"
-        "Step 1/2 — Send the BotFather token of the bot you want to clone.\n\n"
-        "Your token is stored encrypted and is not shown to the approver.\n"
-        "The bot will be created only after Owner approval.\n\n"
-        "/cancel to cancel."
+    await _clone_prompt(
+        update,
+        context,
+        "🤖 <b>CREATE CLONE BOT</b>\n\n"
+        "Step 1/2 — Send your BotFather token.\n\n"
+        "The token is validated and stored encrypted.\n"
+        "It will never be shown to the Owner.\n\n"
+        "After validation, the next step opens automatically.",
     )
 
 
@@ -750,36 +898,55 @@ async def handle_clone_input(update, context):
     state = context.user_data.get("clone_state")
     if not state or not update.message or not update.effective_user:
         return False
+
     text = (update.message.text or "").strip()
     if not text:
         return True
-    if text.lower() == "/cancel":
-        context.user_data.clear()
-        await update.message.reply_text("❌ Clone request cancelled.")
-        return True
+
+    # Delete sensitive token/admin input immediately where Telegram permits it.
+    incoming_message = update.message
 
     if state == "token":
         try:
             me = await validate_clone_token(text)
         except ValueError as exc:
-            await update.message.reply_text(f"❌ {exc}\n\nSend the token again or /cancel.")
+            await _safe_delete_message(incoming_message)
+            await _clone_prompt(
+                update, context,
+                f"❌ <b>Token rejected</b>\n\n{exc}\n\n"
+                "Send the correct BotFather token or tap Cancel."
+            )
             return True
+
         context.user_data["clone_token"] = text
-        context.user_data["clone_bot_id"] = me.id
+        context.user_data["clone_bot_id"] = int(me.id)
         context.user_data["clone_username"] = me.username
         context.user_data["clone_name"] = me.first_name or me.username
         context.user_data["clone_state"] = "admin_id"
-        await update.message.reply_text(
-            "Step 2/2 — Send the Telegram numeric User ID that will be the clone Owner/Admin.\n\n"
-            "Example: 123456789\n\n/cancel to cancel."
+        await _safe_delete_message(incoming_message)
+        await _clone_prompt(
+            update, context,
+            f"✅ <b>BOT VERIFIED</b>\n\n"
+            f"🤖 @{me.username}\n"
+            f"🆔 Bot ID: <code>{me.id}</code>\n\n"
+            "Step 2/2 — Send the numeric Telegram User ID that will manage this clone.\n\n"
+            "Example: <code>123456789</code>"
         )
         return True
 
     if state == "admin_id":
+        await _safe_delete_message(incoming_message)
         admin_id = safe_int(text, 0)
         if admin_id <= 0:
-            await update.message.reply_text("❌ Invalid Telegram User ID. Send a numeric ID.")
+            await _clone_prompt(update, context, "❌ Invalid User ID.\n\nSend only a numeric Telegram User ID.")
             return True
+
+        allowed, limit, used = can_create_clone(update.effective_user.id)
+        if not allowed:
+            context.user_data.clear()
+            await update.message.reply_text("🔒 Your clone permission is no longer available.")
+            return True
+
         bot_id = int(context.user_data.get("clone_bot_id", 0))
         if db_one("SELECT bot_id FROM child_bots WHERE bot_id=? AND enabled=1", (bot_id,)):
             context.user_data.clear()
@@ -791,46 +958,79 @@ async def handle_clone_input(update, context):
             return True
         if clone_count() >= MAX_CLONES:
             context.user_data.clear()
-            await update.message.reply_text(f"❌ Clone limit reached ({MAX_CLONES}).")
+            await update.message.reply_text(f"❌ Global clone limit reached ({MAX_CLONES}).")
             return True
 
         token = context.user_data.get("clone_token", "")
-        me = await validate_clone_token(token)
-        encrypted = encrypt_token(token)
-        cur = DB.execute(
-            """INSERT INTO clone_requests(requester_id,admin_id,encrypted_token,bot_id,username,display_name,status,created_at)
-            VALUES(?,?,?,?,?,?, 'pending', ?)""",
-            (update.effective_user.id, admin_id, encrypted, me.id, me.username,
-             me.first_name or me.username, utc_now()),
-        )
-        DB.commit()
-        request_id = cur.lastrowid
-        context.user_data.clear()
-        await update.message.reply_text(
-            f"✅ Clone request #{request_id} submitted.\n\n"
-            f"Bot: @{me.username}\nAdmin ID: {admin_id}\n\n"
-            "Waiting for Owner approval."
-        )
-        for owner_id in ADMIN_IDS:
-            try:
-                await context.bot.send_message(
-                    owner_id,
-                    f"🔔 NEW CLONE REQUEST #{request_id}\n\n"
-                    f"Bot: @{me.username}\n"
-                    f"Bot ID: {me.id}\n"
-                    f"Requested by: {update.effective_user.id}\n"
-                    f"Clone Admin: {admin_id}\n\n"
-                    "Approve or reject this clone.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [
-                            create_button("✅ APPROVE", "CALLBACK", callback=f"clone:approve:{request_id}", style="success"),
-                            create_button("❌ REJECT", "CALLBACK", callback=f"clone:reject:{request_id}", style="danger"),
-                        ]
-                    ]),
-                )
-            except TelegramError:
-                pass
-        return True
+        try:
+            me = await validate_clone_token(token)
+            encrypted = encrypt_token(token)
+            cur = DB.execute(
+                """INSERT INTO clone_requests(
+                    requester_id,admin_id,encrypted_token,bot_id,username,display_name,status,created_at
+                ) VALUES(?,?,?,?,?,?, 'pending', ?)""",
+                (
+                    update.effective_user.id, admin_id, encrypted, me.id,
+                    me.username, me.first_name or me.username, utc_now()
+                ),
+            )
+            DB.commit()
+            request_id = cur.lastrowid
+            old_prompt = context.user_data.get("clone_prompt_message_id")
+            if old_prompt and update.effective_chat:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=update.effective_chat.id,
+                        message_id=int(old_prompt),
+                    )
+                except TelegramError:
+                    pass
+            context.user_data.clear()
+
+            await update.message.reply_text(
+                f"✅ <b>CLONE REQUEST SUBMITTED</b>\n\n"
+                f"🤖 @{me.username}\n"
+                f"👤 Admin ID: <code>{admin_id}</code>\n"
+                f"🆔 Request: #{request_id}\n\n"
+                "Owner approval is required before this bot starts."
+            )
+
+            requester = update.effective_user
+            requester_name = (
+                f"@{requester.username}" if requester.username
+                else (requester.full_name or str(requester.id))
+            )
+            for owner_id in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(
+                        owner_id,
+                        f"🔔 <b>NEW CLONE REQUEST #{request_id}</b>\n\n"
+                        f"🤖 <b>Bot:</b> @{me.username}\n"
+                        f"🆔 <b>Bot ID:</b> <code>{me.id}</code>\n"
+                        f"👤 <b>Requested by:</b> {requester_name}\n"
+                        f"🆔 <b>Requester ID:</b> <code>{requester.id}</code>\n"
+                        f"👤 <b>Clone Admin ID:</b> <code>{admin_id}</code>\n\n"
+                        "Choose an action:",
+                        reply_markup=InlineKeyboardMarkup([
+                            [
+                                create_button("✅ Approve", "CALLBACK", callback=f"clone:approve:{request_id}", style="success"),
+                                create_button("❌ Reject", "CALLBACK", callback=f"clone:reject:{request_id}", style="danger"),
+                            ],
+                            [create_button("👥 View Creator", "CALLBACK", callback=f"clone:creator:{requester.id}", style="primary")],
+                        ]),
+                    )
+                except TelegramError:
+                    logger.exception("Failed to notify Owner about clone request %s", request_id)
+            return True
+        except Exception as exc:
+            context.user_data.clear()
+            logger.exception("Clone request creation failed")
+            await update.message.reply_text(
+                "❌ Clone request could not be created safely.\n\n"
+                "Please retry after checking the token and Admin ID."
+            )
+            return True
+
     return False
 
 
@@ -918,6 +1118,7 @@ def launch_clone_process(bot_id, token, admin_id, db_path):
         env["CLONE_MODE"] = "1"
         env["CLONE_DB_DIR"] = str(CLONE_DB_DIR)
         env["PORT"] = "0"
+        env["TOKEN_ENCRYPTION_KEY"] = os.getenv("TOKEN_ENCRYPTION_KEY", "") or BOT_TOKEN
         proc = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve())],
             env=env,
@@ -955,7 +1156,16 @@ async def admin_clone_manager(update, context):
     text += f"Pending Requests: {len(pending)}\n\n"
     if rows:
         for r in rows[:20]:
-            text += f"• @{r['username'] or r['bot_id']} — {r['status']} — Admin {r['admin_id']}\n"
+            admin_row = db_one("SELECT username,first_name FROM users WHERE id=?", (r["admin_id"],))
+            admin_label = (
+                f"@{admin_row['username']}" if admin_row and admin_row["username"]
+                else (admin_row["first_name"] if admin_row and admin_row["first_name"] else str(r["admin_id"]))
+            )
+            text += (
+                f"• 🤖 @{r['username'] or r['bot_id']}\n"
+                f"  👤 Admin: {admin_label} (<code>{r['admin_id']}</code>)\n"
+                f"  📌 {r['status']}\n\n"
+            )
     else:
         text += "No cloned bots yet.\n"
     if pending:
@@ -1592,23 +1802,7 @@ def create_button(
     if normalized:
         kwargs["style"] = normalized
 
-    try:
-        return InlineKeyboardButton(
-            **kwargs
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-        kwargs.pop(
-            "style",
-            None,
-        )
-
-        return InlineKeyboardButton(
-            **kwargs
-        )
+    return InlineKeyboardButton(**kwargs)
 
 
 def get_buttons(scope):
@@ -2004,32 +2198,40 @@ def main_keyboard():
             custom
         )
 
-    return InlineKeyboardMarkup(
+    rows = [
         [
-            [
-                create_button(
-                    "🎯 Claim Agent",
-                    "CALLBACK",
-                    callback="claim",
-                    style="primary",
-                ),
-                create_button(
-                    "📊 Statistics",
-                    "CALLBACK",
-                    callback="stats",
-                    style="primary",
-                ),
-            ],
-            [
-                create_button(
-                    "🤝 Refer & Earn",
-                    "CALLBACK",
-                    callback="referral",
-                    style="success",
-                )
-            ],
-        ]
-    )
+            create_button(
+                "🎯 Claim Agent",
+                "CALLBACK",
+                callback="claim",
+                style="primary",
+            ),
+            create_button(
+                "📊 Statistics",
+                "CALLBACK",
+                callback="stats",
+                style="primary",
+            ),
+        ],
+        [
+            create_button(
+                "🤝 Refer & Earn",
+                "CALLBACK",
+                callback="referral",
+                style="success",
+            )
+        ],
+    ]
+    if not CLONE_MODE and not BROADCAST_MODE:
+        rows.append([
+            create_button(
+                "🤖 Create Clone Bot",
+                "CALLBACK",
+                callback="clone:start",
+                style="primary",
+            )
+        ])
+    return InlineKeyboardMarkup(rows)
 
 
 def referral_keyboard():
@@ -2270,6 +2472,10 @@ async def start_command(
     ):
         return
 
+    if BROADCAST_MODE:
+        await broadcast_bot_start(update, context)
+        return
+
     user_id = update.effective_user.id
 
     referral_id = None
@@ -2293,6 +2499,7 @@ async def start_command(
             context,
             update.effective_user,
         )
+        await notify_broadcast_admin_from_clone(user_id, update.effective_user, context)
 
     if is_blocked(user_id):
         return
@@ -2876,6 +3083,37 @@ async def referral_callback(
 # MAIN MENU
 # ============================================================
 
+async def clone_start_callback(update, context):
+    query = update.callback_query
+    user = query.from_user
+    await answer_callback(query)
+    if CLONE_MODE or BROADCAST_MODE:
+        return
+    allowed, limit, used = can_create_clone(user.id)
+    if not allowed:
+        await query.message.reply_text(
+            "🔒 <b>Clone permission required.</b>\n\n"
+            "The Owner must grant you clone permission before you can create a bot.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    context.user_data.clear()
+    context.user_data["clone_state"] = "token"
+    context.user_data["clone_prompt_message_id"] = query.message.message_id
+    try:
+        await query.message.edit_text(
+            "🤖 <b>CREATE CLONE BOT</b>\n\n"
+            "Step 1/2 — Send the BotFather token.\n\n"
+            "Your token is validated and stored encrypted.\n"
+            "After validation, Step 2 opens automatically.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [create_button("❌ Cancel", "CALLBACK", callback="clone:cancel", style="danger")]
+            ]),
+        )
+    except TelegramError:
+        await _clone_prompt(update, context, "🤖 <b>CREATE CLONE BOT</b>\n\nStep 1/2 — Send the BotFather token.")
+
 async def main_callback(
     update,
     context,
@@ -2908,6 +3146,461 @@ async def main_callback(
 
 
 # ============================================================
+# OWNER: CLONE CREATOR PERMISSIONS
+# ============================================================
+
+async def admin_clone_creators(update, context):
+    rows = db_all("SELECT * FROM clone_creators ORDER BY enabled DESC, updated_at DESC")
+    text = "👥 <b>CLONE CREATOR PERMISSIONS</b>\n\n"
+    if not rows:
+        text += "No creator permissions configured.\n"
+    else:
+        for r in rows[:20]:
+            used = creator_used_bots(r["user_id"])
+            status = "ON" if r["enabled"] else "OFF"
+            text += (
+                f"• <code>{r['user_id']}</code> — {status} — "
+                f"{used}/{r['max_bots']}\n"
+            )
+    markup_rows = [
+        [create_button("➕ Grant / Update", "CALLBACK", callback="adm:creator:add", style="success")],
+    ]
+    for r in rows[:15]:
+        toggle = "⛔ Revoke" if r["enabled"] else "✅ Enable"
+        markup_rows.append([
+            create_button(
+                f"{toggle} {r['user_id']}",
+                "CALLBACK",
+                callback=f"adm:creator:toggle:{r['user_id']}",
+                style="danger" if r["enabled"] else "success",
+            )
+        ])
+    markup_rows += [
+        [create_button("🔄 Refresh", "CALLBACK", callback="adm:creators", style="primary")],
+        [create_button("⬅️ Owner Panel", "CALLBACK", callback="adm:dash", style="primary")],
+    ]
+    await edit_admin_message(update, text[:4000], InlineKeyboardMarkup(markup_rows))
+
+
+async def admin_creator_toggle(update, context, user_id):
+    if update.effective_user.id not in ADMIN_IDS:
+        await answer_callback(update.callback_query, "Owner only.", True)
+        return
+    DB.execute(
+        "UPDATE clone_creators SET enabled=1-enabled,updated_at=? WHERE user_id=?",
+        (utc_now(), int(user_id)),
+    )
+    DB.commit()
+    log_action(update.effective_user.id, "toggle_clone_permission", str(user_id))
+    await admin_clone_creators(update, context)
+
+
+async def admin_creator_add_start(update, context):
+    context.user_data["creator_state"] = "user_id"
+    await edit_admin_message(
+        update,
+        "👥 <b>GRANT CLONE PERMISSION</b>\n\n"
+        "Send Telegram User ID.\n\n"
+        "You can then set how many clone bots this user may create.\n\n"
+        "Use /cancel anytime.",
+        InlineKeyboardMarkup([[create_button("❌ Cancel", "CALLBACK", callback="adm:creators", style="danger")]]),
+    )
+
+
+async def handle_creator_permission_input(update, context):
+    state = context.user_data.get("creator_state")
+    if not state or not update.message:
+        return False
+    if state == "user_id":
+        uid = safe_int((update.message.text or "").strip(), 0)
+        if uid <= 0:
+            await update.message.reply_text("❌ Invalid numeric User ID.")
+            return True
+        context.user_data["creator_user_id"] = uid
+        context.user_data["creator_state"] = "max_bots"
+        await update.message.reply_text(
+            "✅ User ID saved.\n\n"
+            "Now send maximum clone bots allowed.\n"
+            "Example: 5\n\n"
+            "/cancel"
+        )
+        return True
+    if state == "max_bots":
+        max_bots = safe_int((update.message.text or "").strip(), 0)
+        uid = safe_int(context.user_data.get("creator_user_id"), 0)
+        if max_bots <= 0 or uid <= 0:
+            await update.message.reply_text("❌ Invalid value. Send a positive number.")
+            return True
+        now = utc_now()
+        DB.execute(
+            """INSERT INTO clone_creators(user_id,enabled,max_bots,granted_by,created_at,updated_at)
+               VALUES(?,1,?,?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET enabled=1,max_bots=excluded.max_bots,
+               granted_by=excluded.granted_by,updated_at=excluded.updated_at""",
+            (uid, max_bots, update.effective_user.id, now, now),
+        )
+        DB.commit()
+        log_action(update.effective_user.id, "grant_clone_permission", f"user={uid},max={max_bots}")
+        context.user_data.clear()
+        await admin_clone_creators(update, context)
+        return True
+    return False
+
+
+# ============================================================
+# SPECIAL BROADCAST MESSAGE SYNC
+# ============================================================
+
+SPECIAL_BROADCAST_MESSAGES = {"broadcast_welcome", "broadcast_member_alert"}
+
+
+def _copy_message_row_to_db(target_db, key):
+    row = db_one("SELECT * FROM messages WHERE key=?", (key,))
+    if not row:
+        return
+    conn = sqlite3.connect(str(target_db), timeout=30)
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(
+            """INSERT INTO messages(key,text,entities_json,media_type,media_file_id,updated_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET text=excluded.text,
+               entities_json=excluded.entities_json,media_type=excluded.media_type,
+               media_file_id=excluded.media_file_id,updated_at=excluded.updated_at""",
+            (
+                row["key"], row["text"], row["entities_json"], row["media_type"],
+                row["media_file_id"], row["updated_at"],
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def sync_special_broadcast_message(key):
+    if key not in SPECIAL_BROADCAST_MESSAGES:
+        return
+    cfg = get_broadcast_config()
+    if cfg:
+        try:
+            _copy_message_row_to_db(BROADCAST_DB_PATH, key)
+        except Exception:
+            logger.exception("Could not sync %s to Broadcast Bot DB", key)
+    for clone in db_all("SELECT db_path FROM child_bots WHERE enabled=1"):
+        try:
+            cpath = Path(clone["db_path"])
+            if cpath.exists():
+                _copy_message_row_to_db(cpath, key)
+        except Exception:
+            logger.exception("Could not sync %s to clone %s", key, clone["db_path"])
+
+
+# ============================================================
+# OWNER: BROADCAST BOT
+# ============================================================
+
+def get_broadcast_config():
+    return db_one("SELECT * FROM broadcast_bot_config WHERE id=1")
+
+
+def broadcast_token():
+    row = get_broadcast_config()
+    return decrypt_token(row["encrypted_token"]) if row and row["enabled"] else ""
+
+
+async def admin_broadcast_bot(update, context):
+    row = get_broadcast_config()
+    if row and row["enabled"]:
+        text = (
+            "📢 <b>BROADCAST BOT</b>\n\n"
+            f"🤖 Bot: @{row['username'] or row['bot_id']}\n"
+            f"🆔 ID: <code>{row['bot_id']}</code>\n"
+            f"✅ Status: ENABLED\n\n"
+            "This bot is used for clone-admin member alerts and broadcasts."
+        )
+        buttons = [
+            [create_button("✏️ Welcome Message", "CALLBACK", callback="adm:bcmsg:welcome", style="primary")],
+            [create_button("🔔 Member Alert Message", "CALLBACK", callback="adm:bcmsg:member", style="primary")],
+            [create_button("👥 Subscribers", "CALLBACK", callback="adm:bcsus:0", style="primary")],
+            [create_button("🔄 Replace Bot", "CALLBACK", callback="adm:bcsetup", style="primary")],
+            [create_button("⛔ Disable", "CALLBACK", callback="adm:bcdisable", style="danger")],
+            [create_button("⬅️ Owner Panel", "CALLBACK", callback="adm:dash", style="primary")],
+        ]
+        await edit_admin_message(update, text, InlineKeyboardMarkup(buttons))
+    else:
+        await edit_admin_message(
+            update,
+            "📢 <b>ADD BROADCAST BOT</b>\n\n"
+            "No Broadcast Bot is configured.\n\n"
+            "Owner-only setup:\n"
+            "1. Send BotFather token\n"
+            "2. Bot is verified\n"
+            "3. Bot becomes the notification/broadcast bot",
+            InlineKeyboardMarkup([
+                [create_button("➕ Add Broadcast Bot", "CALLBACK", callback="adm:bcsetup", style="success")],
+                [create_button("⬅️ Owner Panel", "CALLBACK", callback="adm:dash", style="primary")],
+            ]),
+        )
+
+
+async def admin_broadcast_bot_setup_start(update, context):
+    context.user_data.clear()
+    context.user_data["broadcast_bot_state"] = "token"
+    await edit_admin_message(
+        update,
+        "📢 <b>ADD BROADCAST BOT</b>\n\n"
+        "Send the BotFather token.\n"
+        "The token will be encrypted immediately.\n\n"
+        "The next step opens automatically.",
+        InlineKeyboardMarkup([[create_button("❌ Cancel", "CALLBACK", callback="adm:broadcast_bot", style="danger")]]),
+    )
+
+
+async def handle_broadcast_bot_setup_input(update, context):
+    state = context.user_data.get("broadcast_bot_state")
+    if not state or not update.message:
+        return False
+    if state == "token":
+        token = (update.message.text or "").strip()
+        await _safe_delete_message(update.message)
+        try:
+            me = await validate_clone_token(token)
+        except ValueError as exc:
+            await update.message.reply_text(f"❌ Broadcast Bot token rejected.\n\n{exc}")
+            return True
+
+        existing = get_broadcast_config()
+        if existing:
+            stop_process(CLONE_PROCESSES.get(f"broadcast:{existing['bot_id']}"))
+        DB.execute(
+            """INSERT INTO broadcast_bot_config(id,bot_id,username,display_name,encrypted_token,enabled,created_at,updated_at)
+               VALUES(1,?,?,?,?,1,?,?)
+               ON CONFLICT(id) DO UPDATE SET bot_id=excluded.bot_id,username=excluded.username,
+               display_name=excluded.display_name,encrypted_token=excluded.encrypted_token,
+               enabled=1,updated_at=excluded.updated_at""",
+            (me.id, me.username, me.first_name or me.username, encrypt_token(token), utc_now(), utc_now()),
+        )
+        DB.commit()
+        sync_broadcast_settings_to_clones()
+        ok, info = launch_broadcast_process(me.id, token)
+        context.user_data.clear()
+        await update.message.reply_text(
+            f"✅ <b>BROADCAST BOT READY</b>\n\n"
+            f"🤖 @{me.username}\n"
+            f"🆔 <code>{me.id}</code>\n\n"
+            f"{'✅ Process started.' if ok else '⚠️ Saved, but process could not be started: ' + str(info)[:200]}"
+        )
+        return True
+    return False
+
+
+def sync_broadcast_settings_to_clones():
+    row = get_broadcast_config()
+    if not row:
+        return
+    token = row["encrypted_token"] or ""
+    for clone in db_all("SELECT db_path FROM child_bots WHERE enabled=1"):
+        try:
+            cpath = Path(clone["db_path"])
+            if not cpath.exists():
+                continue
+            conn = sqlite3.connect(str(cpath), timeout=30)
+            conn.execute("PRAGMA busy_timeout=30000")
+            for key, value in {
+                "broadcast_bot_username": row["username"] or "",
+                "broadcast_bot_token_encrypted": token,
+                "broadcast_member_alert_enabled": "1",
+            }.items():
+                conn.execute(
+                    "INSERT INTO settings(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, str(value)),
+                )
+            conn.commit()
+            conn.close()
+        except Exception:
+            logger.exception("Could not sync broadcast settings to clone %s", clone["db_path"])
+
+
+async def admin_broadcast_disable(update, context):
+    row = get_broadcast_config()
+    if row:
+        proc = CLONE_PROCESSES.get(f"broadcast:{row['bot_id']}")
+        stop_process(proc)
+        DB.execute("UPDATE broadcast_bot_config SET enabled=0,updated_at=? WHERE id=1", (utc_now(),))
+        DB.commit()
+        log_action(update.effective_user.id, "disable_broadcast_bot", str(row["bot_id"]))
+    await admin_broadcast_bot(update, context)
+
+
+def launch_broadcast_process(bot_id, token):
+    try:
+        env = os.environ.copy()
+        env["BOT_TOKEN"] = token
+        env["ADMIN_IDS"] = ",".join(str(x) for x in sorted(ADMIN_IDS))
+        env["ADMIN_ID"] = str(next(iter(ADMIN_IDS)))
+        env["DATABASE_PATH"] = str(BROADCAST_DB_PATH)
+        env["PERSISTENCE_PATH"] = str(CLONE_DB_DIR / "broadcast_bot_persistence.pkl")
+        env["BACKUP_DIR"] = str(CLONE_DB_DIR / "broadcast_backups")
+        env["CLONE_MODE"] = "1"
+        env["BROADCAST_MODE"] = "1"
+        env["CLONE_DB_DIR"] = str(CLONE_DB_DIR)
+        env["TOKEN_ENCRYPTION_KEY"] = os.getenv("TOKEN_ENCRYPTION_KEY", "") or BOT_TOKEN
+        proc = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve())],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        CLONE_PROCESSES[f"broadcast:{bot_id}"] = proc
+        return True, proc.pid
+    except Exception as exc:
+        logger.exception("Could not launch Broadcast Bot")
+        return False, clean_error(exc)
+
+
+def stop_process(proc):
+    try:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    except Exception:
+        logger.exception("Could not stop child process")
+
+
+async def broadcast_bot_start(update, context):
+    if not BROADCAST_MODE or not update.effective_user or not update.effective_chat:
+        return
+    u = update.effective_user
+    now = utc_now()
+    DB.execute(
+        """INSERT INTO users(
+            id,username,first_name,last_name,join_date,last_activity,blocked
+        ) VALUES(?,?,?,?,?,?,0)
+        ON CONFLICT(id) DO UPDATE SET username=excluded.username,
+        first_name=excluded.first_name,last_name=excluded.last_name,
+        last_activity=excluded.last_activity""",
+        (u.id, u.username, u.first_name, u.last_name, now, now),
+    )
+    DB.execute(
+        """INSERT INTO broadcast_subscribers(
+            user_id,username,first_name,enabled,started_at,last_seen
+        ) VALUES(?,?,?,1,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,
+        first_name=excluded.first_name,enabled=1,last_seen=excluded.last_seen""",
+        (u.id, u.username, u.first_name, now, now),
+    )
+    DB.commit()
+    markup = InlineKeyboardMarkup([
+        [create_button("📢 Broadcast Channel", "CALLBACK", callback="noop", style="primary")]
+    ])
+    if db_one("SELECT key FROM messages WHERE key='broadcast_welcome'"):
+        await send_configured_message(context, u.id, "broadcast_welcome", reply_markup=markup)
+    else:
+        await update.message.reply_text(
+            "👋 Welcome! You are now subscribed to important updates.",
+            reply_markup=markup,
+        )
+
+
+async def notify_broadcast_admin_from_clone(user_id, user, context):
+    if not CLONE_MODE or BROADCAST_MODE:
+        return
+    encrypted = get_setting("broadcast_bot_token_encrypted", "")
+    username = get_setting("broadcast_bot_username", "")
+    admin_ids = [r["user_id"] for r in db_all("SELECT user_id FROM admins WHERE enabled=1")]
+    if not encrypted or not admin_ids:
+        return
+    token = decrypt_token(encrypted)
+    if not token:
+        return
+
+    alert_row = get_message("broadcast_member_alert")
+    alert_text = alert_row["text"] or (
+        "👤 New member joined {bot_name}\n\n"
+        "Name: {first_name}\nUsername: {username}\n"
+        "User ID: {user_id}\nTotal Members: {total_users}"
+    )
+    stored_entities = deserialize_entities(alert_row["entities"], context.bot)
+    # Render against the clone's real user DB so placeholders and entity offsets survive.
+    rendered_text, entities = render_template_with_entities(
+        alert_text, stored_entities, user_id
+    )
+
+    from telegram import Bot
+    b = Bot(token=token)
+    try:
+        await b.initialize()
+        for admin_id in admin_ids:
+            try:
+                await b.send_message(
+                    chat_id=admin_id,
+                    text=rendered_text,
+                    entities=entities,
+                )
+            except Forbidden:
+                if username:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text="📢 <b>Start the Broadcast Bot</b> to receive member alerts from this clone.",
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=InlineKeyboardMarkup([[
+                                create_button(
+                                    "📢 Start Broadcast Bot",
+                                    "URL",
+                                    url=f"https://t.me/{username}?start=subscribe",
+                                    style="primary",
+                                )
+                            ]]),
+                        )
+                    except TelegramError:
+                        pass
+            except RetryAfter as exc:
+                await asyncio.sleep(float(exc.retry_after) + 0.25)
+                try:
+                    await b.send_message(chat_id=admin_id, text=rendered_text, entities=entities)
+                except TelegramError:
+                    logger.exception("Broadcast member alert retry failed for %s", admin_id)
+            except TelegramError:
+                logger.exception("Broadcast member alert failed for admin %s", admin_id)
+    finally:
+        try:
+            await b.shutdown()
+        except Exception:
+            pass
+
+
+async def admin_broadcast_subscribers(update, context, page=0):
+    rows = db_all(
+        "SELECT * FROM broadcast_subscribers ORDER BY last_seen DESC LIMIT 30 OFFSET ?",
+        (max(0, page) * 30,),
+    )
+    total = db_one("SELECT COUNT(*) AS c FROM broadcast_subscribers")["c"]
+    text = f"👥 <b>BROADCAST SUBSCRIBERS</b>\n\nTotal: {total}\n\n"
+    buttons = []
+    for r in rows[:20]:
+        text += (
+            f"• <code>{r['user_id']}</code> "
+            f"{'✅' if r['enabled'] else '⛔'} "
+            f"{('@'+r['username']) if r['username'] else (r['first_name'] or '')}\n"
+        )
+    buttons.append([create_button("⬅️ Broadcast Bot", "CALLBACK", callback="adm:broadcast_bot", style="primary")])
+    await edit_admin_message(update, text[:4000], InlineKeyboardMarkup(buttons))
+
+
+async def admin_broadcast_message_edit(update, context, key):
+    if update.effective_user.id not in ADMIN_IDS:
+        await answer_callback(update.callback_query, "Owner only.", True)
+        return
+    await admin_message_edit(update, context, key)
+
+
+# ============================================================
 # ADMIN KEYBOARD
 # ============================================================
 
@@ -2923,6 +3616,12 @@ def admin_keyboard():
             ("🔧 Maintenance", "adm:maintenance"),
             ("⚙️ Settings", "adm:settings"),
             ("✅ Auto-Accept", "adm:autoaccept"),
+            ("🎨 Button Colors", "adm:colors"),
+        ]
+    elif BROADCAST_MODE:
+        items = [
+            ("📊 Statistics", "adm:stats"),
+            ("📢 Broadcast", "adm:broadcast"),
             ("🎨 Button Colors", "adm:colors"),
         ]
     else:
@@ -2947,6 +3646,8 @@ def admin_keyboard():
             ("✅ Auto-Accept", "adm:autoaccept"),
             ("🎨 Button Colors", "adm:colors"),
             ("🤖 Clone Bots", "adm:clones"),
+            ("👥 Clone Permissions", "adm:creators"),
+            ("📢 Broadcast Bot", "adm:broadcast_bot"),
         ]
 
     rows = []
@@ -3026,11 +3727,83 @@ async def admin_callback_router(
     if data == "adm:clones":
         await admin_clone_manager(update, context)
         return
+    if data == "adm:creators":
+        await admin_clone_creators(update, context)
+        return
+    if data == "adm:creator:add":
+        await admin_creator_add_start(update, context)
+        return
+    if data == "adm:broadcast_bot":
+        await admin_broadcast_bot(update, context)
+        return
+    if data.startswith("adm:creator:toggle:"):
+        await admin_creator_toggle(update, context, safe_int(data.split(":")[-1], 0))
+        return
+    if data == "adm:bcexclude":
+        context.user_data["state"] = "broadcast_exclude"
+        await query.message.reply_text(
+            "🚫 Send User IDs to exclude from this broadcast.\n\n"
+            "Example: 123456789,987654321\n"
+            "Send 0 for nobody to be excluded.",
+            reply_markup=InlineKeyboardMarkup([
+                [create_button("❌ Cancel", "CALLBACK", callback="adm:cancel_broadcast", style="danger")]
+            ]),
+        )
+        return
+    if data == "adm:bcexclude_skip":
+        data_b = context.user_data.setdefault("broadcast", {})
+        data_b["exclude_ids"] = []
+        await send_broadcast_preview(update, context)
+        return
+    if data.startswith("adm:bcmsg:"):
+        if user_id not in ADMIN_IDS:
+            await answer_callback(query, "Owner only.", True)
+            return
+        key = "broadcast_welcome" if data.endswith(":welcome") else "broadcast_member_alert"
+        await admin_broadcast_message_edit(update, context, key)
+        return
+    if data.startswith("adm:bcsus:"):
+        if user_id not in ADMIN_IDS:
+            await answer_callback(query, "Owner only.", True)
+            return
+        await admin_broadcast_subscribers(update, context, safe_int(data.split(":")[-1], 0))
+        return
+    if data == "adm:bcsetup":
+        await admin_broadcast_bot_setup_start(update, context)
+        return
+    if data == "adm:bcdisable":
+        await admin_broadcast_disable(update, context)
+        return
+    if data == "clone:cancel":
+        context.user_data.clear()
+        try:
+            await query.message.edit_text(
+                "❌ <b>Clone creation cancelled.</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=admin_keyboard() if is_admin(user_id) else None,
+            )
+        except TelegramError:
+            pass
+        return
     if data.startswith("clone:approve:"):
         await approve_clone_request(update, context, safe_int(data.split(":")[-1], 0))
         return
     if data.startswith("clone:reject:"):
         await reject_clone_request(update, context, safe_int(data.split(":")[-1], 0))
+        return
+    if data.startswith("clone:creator:"):
+        creator_id = safe_int(data.split(":")[-1], 0)
+        row = creator_permission(creator_id)
+        used = creator_used_bots(creator_id)
+        label = (
+            f"👥 <b>CREATOR</b>\n\n"
+            f"🆔 <code>{creator_id}</code>\n"
+            f"Permission: {'ON' if row else 'OFF'}\n"
+            f"Used: {used}/{row['max_bots'] if row else 0}"
+        )
+        await edit_admin_message(update, label, InlineKeyboardMarkup([
+            [create_button("⬅️ Clone Request", "CALLBACK", callback="adm:clones", style="primary")]
+        ]))
         return
 
     # Only clear transient admin input when the clicked button starts a new
@@ -3046,6 +3819,13 @@ async def admin_callback_router(
         data.startswith("adm:chcolor:")
         or data.startswith("adm:bcbtn_")
         or data.startswith("adm:confirm_broadcast:")
+        or data.startswith("adm:bcsetup")
+        or data.startswith("adm:creator:")
+        or data.startswith("adm:bcexclude")
+        or data.startswith("adm:bcmsg:")
+        or data.startswith("adm:bcsus:")
+        or data == "adm:cancel_broadcast"
+        or data == "clone:cancel"
     )
     if not stateful_callback and data != "adm:cancel_broadcast":
         context.user_data.clear()
@@ -3281,6 +4061,22 @@ async def admin_callback_router(
                         admin_keyboard(),
                     )
 
+        elif data.startswith("adm:bcbtn_color:"):
+            idx_color = safe_int(data.split(":")[-1], -1)
+            draft = context.user_data.get("broadcast") or {}
+            buttons = draft.get("buttons", [])
+            if 0 <= idx_color < len(buttons):
+                current = buttons[idx_color].get("style") or ""
+                buttons[idx_color]["style"] = _next_color(current) or "primary"
+            await query.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        create_button("🎨 Cycle Color", "CALLBACK", callback=f"adm:bcbtn_color:{idx_color}", style=buttons[idx_color].get("style") if 0 <= idx_color < len(buttons) else "primary"),
+                        create_button("▶️ Continue", "CALLBACK", callback="adm:bcbtn_skip", style="success"),
+                    ]
+                ])
+            )
+
         elif data == "adm:bcbtn_add":
             if context.user_data.get("broadcast") is None:
                 # In-progress broadcast text/media is gone (restart, stale
@@ -3307,8 +4103,16 @@ async def admin_callback_router(
                     context,
                 )
             else:
-                context.user_data["state"] = "broadcast"
-                await send_broadcast_preview(query, context)
+                context.user_data["state"] = "broadcast_exclude_choice"
+                await query.message.reply_text(
+                    "🚫 Exclude any User IDs from this broadcast?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            create_button("🚫 Exclude IDs", "CALLBACK", callback="adm:bcexclude", style="danger"),
+                            create_button("➡️ None", "CALLBACK", callback="adm:bcexclude_skip", style="success"),
+                        ]
+                    ]),
+                )
 
         elif data.startswith(
             "adm:msgedit:"
@@ -6360,13 +7164,15 @@ async def send_broadcast_preview(update_or_message, context):
     data = context.user_data.get("broadcast") or {}
     text = data.get("text", "")
 
-    total = db_one(
-        """
-        SELECT COUNT(*) AS c
-        FROM users
-        WHERE blocked=0
-        """
-    )["c"]
+    if BROADCAST_MODE:
+        total_row = db_one(
+            "SELECT COUNT(*) AS c FROM broadcast_subscribers WHERE enabled=1"
+        )
+    else:
+        total_row = db_one("SELECT COUNT(*) AS c FROM users WHERE blocked=0")
+    total = int(total_row["c"] if total_row else 0)
+    excluded_preview = set(context.user_data.get("broadcast", {}).get("exclude_ids", []))
+    total = max(0, total - len(excluded_preview))
 
     one_off_rows = []
     for button in data.get("buttons", []):
@@ -6376,7 +7182,7 @@ async def send_broadcast_preview(update_or_message, context):
                     button["text"],
                     "URL",
                     url=button["url"],
-                    style="primary",
+                    style=button.get("style") or "primary",
                 )
             ]
         )
@@ -6445,14 +7251,16 @@ async def broadcast_confirm(
         update.effective_user.id
     )
 
-    users = db_all(
-        """
-        SELECT id
-        FROM users
-        WHERE blocked=0
-        ORDER BY id
-        """
-    )
+    if BROADCAST_MODE:
+        users = db_all(
+            "SELECT user_id AS id FROM broadcast_subscribers WHERE enabled=1 ORDER BY user_id"
+        )
+    else:
+        users = db_all(
+            "SELECT id FROM users WHERE blocked=0 ORDER BY id"
+        )
+    excluded = {int(x) for x in data.get("exclude_ids", []) if safe_int(x, 0) > 0}
+    users = [u for u in users if int(u["id"]) not in excluded]
 
     cursor = DB.execute(
         """
@@ -6831,6 +7639,7 @@ async def handle_admin_message(
         )
 
         DB.commit()
+        sync_special_broadcast_message(key)
 
         log_action(
             user_id,
@@ -7351,7 +8160,7 @@ async def handle_extended_admin_state(
 
         broadcast_data = context.user_data.setdefault("broadcast", {"buttons": []})
         broadcast_data.setdefault("buttons", []).append(
-            {"text": button_text, "url": url_in}
+            {"text": button_text, "url": url_in, "style": "primary"}
         )
 
         context.user_data["state"] = "broadcast_button_prompt"
@@ -7369,14 +8178,39 @@ async def handle_extended_admin_state(
                             style="success",
                         ),
                         create_button(
+                            "🎨 Color",
+                            "CALLBACK",
+                            callback=f"adm:bcbtn_color:{len(context.user_data.get('broadcast', {}).get('buttons', []))-1}",
+                            style="primary",
+                        ),
+                        create_button(
                             "▶️ Continue",
                             "CALLBACK",
                             callback="adm:bcbtn_skip",
+                            style="success",
                         ),
                     ]
                 ]
             ),
         )
+        return True
+
+    if state == "broadcast_exclude":
+        raw = (message.text or "").strip()
+        if raw == "0" or not raw:
+            exclude_ids = []
+        else:
+            try:
+                exclude_ids = sorted({int(x.strip()) for x in raw.split(",") if x.strip()})
+            except ValueError:
+                await message.reply_text("❌ Invalid IDs. Use comma-separated numeric Telegram IDs.")
+                return True
+            if any(x <= 0 for x in exclude_ids):
+                await message.reply_text("❌ IDs must be positive numbers.")
+                return True
+        context.user_data.setdefault("broadcast", {})["exclude_ids"] = exclude_ids
+        context.user_data["state"] = "broadcast"
+        await send_broadcast_preview(update, context)
         return True
 
     if state == "channel_wizard":
@@ -7638,7 +8472,22 @@ async def general_message(
     if not update.effective_user:
         return
 
+    if await handle_broadcast_bot_setup_input(update, context):
+        return
+
+    if await handle_creator_permission_input(update, context):
+        return
+
     if await handle_clone_input(update, context):
+        return
+
+    if BROADCAST_MODE and is_admin(update.effective_user.id):
+        if await handle_extended_admin_state(update, context):
+            return
+        if await handle_admin_message(update, context):
+            return
+        if await handle_broadcast_message(update, context):
+            return
         return
 
     if is_admin(
@@ -7683,6 +8532,7 @@ async def general_message(
             context,
             update.effective_user,
         )
+        await notify_broadcast_admin_from_clone(user_id, update.effective_user, context)
 
     user = get_user(
         user_id
@@ -7817,8 +8667,8 @@ async def post_init(
     # webhook-vs-polling Conflict case entirely. Non-fatal: if this call
     # fails we still proceed to polling.
     try:
-        await telegram_bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook cleared and pending updates dropped before polling.")
+        await telegram_bot.delete_webhook(drop_pending_updates=False)
+        logger.info("Webhook cleared; pending updates retained before polling.")
     except Exception:
         logger.exception(
             "Could not delete webhook / drop pending updates; continuing startup"
@@ -7902,7 +8752,7 @@ def build_application():
         )
     )
 
-    if not CLONE_MODE:
+    if not CLONE_MODE and not BROADCAST_MODE:
         application.add_handler(
             CommandHandler(
                 "clone",
@@ -7968,6 +8818,13 @@ def build_application():
 
     application.add_handler(
         CallbackQueryHandler(
+            clone_start_callback,
+            pattern=r"^clone:start$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
             custom_callback_router,
             pattern=(
                 r"^(?!adm:)"
@@ -8004,16 +8861,17 @@ async def cancel_command(
     update,
     context,
 ):
-    if is_admin(
-        update.effective_user.id
-    ):
-
-        context.user_data.clear()
-
+    if not update.effective_user:
+        return
+    was_clone = bool(context.user_data.get("clone_state"))
+    context.user_data.clear()
+    try:
         await update.message.reply_text(
             "❌ Cancelled.",
-            reply_markup=admin_keyboard(),
+            reply_markup=admin_keyboard() if is_admin(update.effective_user.id) else None,
         )
+    except TelegramError:
+        pass
 
 
 
@@ -8047,8 +8905,15 @@ def run_bot():
     """
     _startup_jitter_delay()
     initialize_database()
-    if not CLONE_MODE:
+    if not CLONE_MODE and not BROADCAST_MODE:
+        sync_broadcast_settings_to_clones()
         start_saved_clones()
+        saved_bc = get_broadcast_config()
+        if saved_bc and saved_bc["enabled"]:
+            token = decrypt_token(saved_bc["encrypted_token"])
+            if token:
+                ok, info = launch_broadcast_process(saved_bc["bot_id"], token)
+                logger.info("Saved Broadcast Bot startup: ok=%s info=%s", ok, info)
     application = build_application()
     _run_polling_with_conflict_retry(application)
 
@@ -8071,7 +8936,7 @@ def _run_polling_with_conflict_retry(application):
         try:
             application.run_polling(
                 allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
+                drop_pending_updates=False,
                 close_loop=False,
             )
             # run_polling() returned normally (clean shutdown, e.g. Ctrl+C
@@ -8130,7 +8995,7 @@ if __name__ == "__main__":
 
     # The main bot owns the Render health port. Clone workers only poll Telegram.
     health_server = None
-    if not CLONE_MODE:
+    if not CLONE_MODE and not BROADCAST_MODE:
         health_server = start_health_server()
 
     try:
