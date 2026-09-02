@@ -1,617 +1,1117 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>RΞD · Access</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet" />
-  <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0a0002" />
+    <meta name="description" content="RΞD Access — Invite-only Telegram community. Limited 24-hour window." />
+    <title>RΞD · Exclusive Access</title>
 
-    :root {
-      --red: #ff003c;
-      --red-mid: #cc0033;
-      --red-soft: #ff4d6d;
-      --bg: #0a0002;
-    }
+    <!-- Preconnect for performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap" rel="stylesheet" />
 
-    body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      overflow: hidden;
-      position: relative;
-    }
+    <style>
+        /* ============================================================
+               CSS CUSTOM PROPERTIES — Design Tokens
+               ============================================================ */
+        :root {
+            /* Core colors */
+            --bg-primary: #0a0002;
+            --bg-card: rgba(10, 0, 2, 0.72);
+            --accent-primary: #ff003c;
+            --accent-secondary: #ff4d6d;
+            --accent-tertiary: #cc0033;
+            --accent-glow: rgba(255, 0, 60, 0.35);
+            --accent-glow-strong: rgba(255, 0, 60, 0.6);
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.55);
+            --text-muted: rgba(255, 255, 255, 0.3);
+            --text-faint: rgba(255, 255, 255, 0.12);
+            --border-subtle: rgba(255, 0, 60, 0.08);
+            --border-medium: rgba(255, 0, 60, 0.18);
+            --border-active: rgba(255, 0, 60, 0.4);
 
-    /* ── NOISE OVERLAY ── */
-    body::before {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-      pointer-events: none;
-      z-index: 0;
-    }
+            /* Typography */
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-    /* ── AMBIENT ORBS ── */
-    .orb {
-      position: fixed;
-      border-radius: 50%;
-      filter: blur(120px);
-      pointer-events: none;
-      z-index: 0;
-    }
-    .orb-1 {
-      width: 560px; height: 560px;
-      background: var(--red);
-      top: -290px; right: -190px;
-      opacity: 0.11;
-      animation: float1 18s ease-in-out infinite alternate;
-    }
-    .orb-2 {
-      width: 460px; height: 460px;
-      background: var(--red-mid);
-      bottom: -210px; left: -130px;
-      opacity: 0.09;
-      animation: float2 22s ease-in-out infinite alternate-reverse;
-    }
-    @keyframes float1 { to { transform: translate(70px, -50px) scale(1.4); } }
-    @keyframes float2 { to { transform: translate(-60px, 40px) scale(1.35); } }
+            /* Spacing */
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 16px;
+            --space-lg: 24px;
+            --space-xl: 32px;
+            --space-2xl: 40px;
+            --space-3xl: 48px;
 
-    /* ── CARD ── */
-    .card {
-      position: relative;
-      z-index: 10;
-      max-width: 430px;
-      width: 100%;
-      background: rgba(10, 0, 2, 0.68);
-      backdrop-filter: blur(40px) saturate(1.5);
-      -webkit-backdrop-filter: blur(40px) saturate(1.5);
-      border-radius: 52px;
-      padding: 32px 28px 36px;
-      border: 1px solid rgba(255, 0, 60, 0.18);
-      box-shadow:
-        0 40px 120px rgba(0,0,0,0.88),
-        0 0 0 1px rgba(255,0,60,0.04) inset;
-      text-align: center;
-      animation: borderBreath 3s infinite alternate;
-    }
-    @keyframes borderBreath {
-      0%  { border-color: rgba(255,0,60,0.12); }
-      100%{ border-color: rgba(255,0,60,0.38); }
-    }
+            /* Border radius */
+            --radius-sm: 12px;
+            --radius-md: 24px;
+            --radius-lg: 40px;
+            --radius-xl: 56px;
 
-    /* ══════════════════════════════════════════
-       TOP — TELEGRAM CHANNEL BANNER
-    ══════════════════════════════════════════ */
-    .tg-channel-banner {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: rgba(255,0,60,0.07);
-      border: 1px solid rgba(255,0,60,0.18);
-      border-radius: 20px;
-      padding: 10px 14px 10px 12px;
-      margin-bottom: 24px;
-      text-decoration: none;
-      transition: background 0.25s ease, border-color 0.25s ease, transform 0.2s ease;
-      cursor: pointer;
-    }
-    .tg-channel-banner:hover {
-      background: rgba(255,0,60,0.13);
-      border-color: rgba(255,0,60,0.35);
-      transform: translateY(-1px);
-    }
-    .tg-channel-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .tg-icon-wrap {
-      width: 36px; height: 36px;
-      border-radius: 50%;
-      background: rgba(255,0,60,0.14);
-      border: 1px solid rgba(255,0,60,0.25);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-    .tg-icon-wrap svg {
-      width: 18px; height: 18px;
-      fill: var(--red-soft);
-    }
-    .tg-channel-text {
-      text-align: left;
-    }
-    .tg-channel-label {
-      font-size: 0.62rem;
-      font-weight: 600;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-      color: rgba(255,255,255,0.28);
-      display: block;
-      margin-bottom: 2px;
-    }
-    .tg-channel-name {
-      font-size: 0.9rem;
-      font-weight: 700;
-      color: #fff;
-      letter-spacing: -0.01em;
-    }
-    .tg-channel-name em {
-      font-style: normal;
-      color: var(--red-soft);
-    }
-    .tg-join-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: var(--red);
-      color: #fff;
-      font-size: 0.72rem;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      padding: 6px 14px;
-      border-radius: 30px;
-      white-space: nowrap;
-      box-shadow: 0 4px 18px rgba(255,0,60,0.35);
-      transition: background 0.2s ease, box-shadow 0.2s ease;
-    }
-    .tg-channel-banner:hover .tg-join-pill {
-      background: #ff1a4a;
-      box-shadow: 0 6px 24px rgba(255,0,60,0.5);
-    }
-    .tg-join-pill svg {
-      width: 10px; height: 10px;
-      fill: #fff;
-      flex-shrink: 0;
-    }
+            /* Transitions */
+            --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-base: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-spring: 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+            --transition-smooth: 0.8s cubic-bezier(0.65, 0, 0.35, 1);
 
-    /* ── LIVE BADGE ── */
-    .badge-live {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(255,0,60,0.06);
-      border: 1px solid rgba(255,0,60,0.10);
-      padding: 5px 16px 5px 10px;
-      border-radius: 40px;
-      margin-bottom: 22px;
-    }
-    .live-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--red);
-      box-shadow: 0 0 14px var(--red);
-      animation: dotPulse 1.2s infinite;
-    }
-    @keyframes dotPulse {
-      0%,100% { opacity: 1; transform: scale(1); }
-      50%      { opacity: 0.2; transform: scale(0.65); }
-    }
-    .badge-live-text {
-      font-size: 0.68rem;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: rgba(255,255,255,0.45);
-    }
-    .badge-live-count {
-      color: var(--red-soft);
-      font-weight: 700;
-      background: rgba(255,0,60,0.08);
-      padding: 0 10px;
-      border-radius: 20px;
-    }
+            /* Shadows */
+            --shadow-card: 0 40px 120px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 0, 60, 0.06) inset;
+            --shadow-btn: 0 8px 40px rgba(255, 0, 60, 0.3);
+            --shadow-btn-hover: 0 14px 56px rgba(255, 0, 60, 0.5);
 
-    /* ── HEADLINE ── */
-    h1 {
-      font-size: 2.7rem;
-      font-weight: 800;
-      letter-spacing: -0.032em;
-      line-height: 1.04;
-      color: #fff;
-      margin-bottom: 5px;
-    }
-    h1 .red-text {
-      background: linear-gradient(135deg, #ff4d6d 0%, #cc0033 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    .subhead {
-      color: rgba(255,255,255,0.28);
-      font-size: 0.88rem;
-      font-weight: 400;
-      letter-spacing: 0.04em;
-      margin-bottom: 30px;
-    }
+            /* Z-index layers */
+            --z-background: 0;
+            --z-card: 10;
+            --z-overlay: 20;
+        }
 
-    /* ── TIMER ── */
-    .timer-wrap {
-      margin-bottom: 30px;
-    }
-    .timer-digits {
-      font-size: 3.9rem;
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-      color: #fff;
-      line-height: 1;
-      letter-spacing: 0.02em;
-      margin-bottom: 12px;
-      transition: color 0.4s;
-    }
-    .timer-digits.warn  { color: var(--red-soft); }
-    .timer-digits.urgent{ color: var(--red); animation: textFlash 0.7s infinite; }
-    @keyframes textFlash {
-      0%,100% { opacity:1; text-shadow: 0 0 40px var(--red); }
-      50%      { opacity:0.18; }
-    }
-    .progress-track {
-      width: 100%;
-      height: 3px;
-      background: rgba(255,255,255,0.04);
-      border-radius: 10px;
-      overflow: hidden;
-    }
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--red), var(--red-soft));
-      border-radius: 10px;
-      box-shadow: 0 0 28px rgba(255,0,60,0.45);
-      transition: width 0.45s cubic-bezier(0.25,0.46,0.45,0.94);
-    }
+        /* ============================================================
+               RESET & BASE STYLES
+               ============================================================ */
+        *,
+        *::before,
+        *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-    /* ── TICKER ── */
-    .ticker-wrap {
-      width: 100%;
-      height: 28px;
-      overflow: hidden;
-      margin-bottom: 26px;
-      background: rgba(255,0,60,0.025);
-      border: 1px solid rgba(255,0,60,0.06);
-      border-radius: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .ticker-scroll {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      animation: tickerRoll 12s linear infinite;
-    }
-    @keyframes tickerRoll {
-      0%  { transform: translateY(0); }
-      100%{ transform: translateY(-50%); }
-    }
-    .ticker-item {
-      height: 28px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: rgba(255,255,255,0.32);
-      font-size: 0.73rem;
-      white-space: nowrap;
-      padding: 0 14px;
-    }
-    .ticker-item strong { color: var(--red-soft); font-weight: 600; }
-    .ticker-item .ago   { color: var(--red); font-size: 0.63rem; font-weight: 600; }
+        html {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
+            scroll-behavior: smooth;
+        }
 
-    /* ── MAIN CTA BUTTON ── */
-    .cta-wrap {
-      position: relative;
-      margin-bottom: 0;
-    }
-    .cta-glow {
-      position: absolute;
-      inset: 0;
-      border-radius: 40px;
-      background: var(--red);
-      filter: blur(38px);
-      opacity: 0.11;
-      z-index: 0;
-      animation: glowBeat 2s infinite;
-    }
-    @keyframes glowBeat {
-      0%,100%{ transform:scale(1); opacity:0.11; }
-      50%    { transform:scale(1.07); opacity:0.26; }
-    }
-    .join-btn {
-      position: relative;
-      z-index: 1;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 12px;
-      width: 100%;
-      padding: 18px 24px;
-      background: var(--red);
-      color: #fff;
-      font-size: 1.08rem;
-      font-weight: 700;
-      border: none;
-      border-radius: 40px;
-      cursor: pointer;
-      text-decoration: none;
-      letter-spacing: 0.01em;
-      box-shadow: 0 8px 40px rgba(255,0,60,0.3);
-      transition: all 0.28s cubic-bezier(0.34,1.56,0.64,1);
-      overflow: hidden;
-    }
-    .join-btn::before {
-      content: '';
-      position: absolute;
-      inset: -2px;
-      border-radius: 42px;
-      background: linear-gradient(135deg, rgba(255,255,255,0.12), transparent);
-      opacity: 0;
-      transition: opacity 0.28s;
-    }
-    .join-btn:hover::before { opacity: 1; }
-    .join-btn:hover {
-      transform: translateY(-2px) scale(1.02);
-      box-shadow: 0 14px 56px rgba(255,0,60,0.52);
-      background: #ff1a4a;
-    }
-    .join-btn:active { transform: scale(0.96); }
-    .arrow {
-      font-size: 1.25rem;
-      transition: transform 0.28s ease;
-    }
-    .join-btn:hover .arrow { transform: translateX(6px) rotate(-10deg); }
+        body {
+            font-family: var(--font-family);
+            background: var(--bg-primary);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: var(--space-lg);
+            overflow: hidden;
+            position: relative;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
 
-    /* disabled state */
-    .join-btn.expired {
-      opacity: 0.35;
-      pointer-events: none;
-      background: #444;
-      box-shadow: none;
-    }
+        /* ============================================================
+               AMBIENT BACKGROUND ORBS — Animated Neon Spheres
+               ============================================================ */
+        .glow-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            pointer-events: none;
+            z-index: var(--z-background);
+            will-change: transform, opacity;
+        }
 
-    /* ── FOOTER ── */
-    .footer-meta {
-      display: flex;
-      justify-content: center;
-      gap: 26px;
-      margin-top: 26px;
-      padding-top: 18px;
-      border-top: 1px solid rgba(255,0,60,0.07);
-    }
-    .footer-meta span {
-      color: rgba(255,255,255,0.14);
-      font-size: 0.59rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    .footer-meta b { color: rgba(255,255,255,0.28); font-weight: 700; }
+        .glow-orb--top-right {
+            width: 550px;
+            height: 550px;
+            background: var(--accent-primary);
+            top: -280px;
+            right: -180px;
+            opacity: 0.12;
+            animation: orbFloatTop 18s ease-in-out infinite alternate;
+        }
 
-    /* ── RESPONSIVE ── */
-    @media (max-width: 440px) {
-      .card { padding: 24px 16px 28px; border-radius: 38px; }
-      h1 { font-size: 2.2rem; }
-      .timer-digits { font-size: 3.2rem; }
-      .join-btn { font-size: 1rem; padding: 16px 18px; }
-      .tg-channel-banner { padding: 8px 10px 8px 10px; border-radius: 16px; }
-    }
-  </style>
+        .glow-orb--bottom-left {
+            width: 450px;
+            height: 450px;
+            background: var(--accent-tertiary);
+            bottom: -220px;
+            left: -140px;
+            opacity: 0.1;
+            animation: orbFloatBottom 22s ease-in-out infinite alternate-reverse;
+        }
+
+        .glow-orb--center {
+            width: 300px;
+            height: 300px;
+            background: var(--accent-secondary);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0.04;
+            animation: orbPulse 8s ease-in-out infinite;
+        }
+
+        @keyframes orbFloatTop {
+            0% {
+                transform: translate(0, 0) scale(1);
+            }
+            100% {
+                transform: translate(70px, -50px) scale(1.4);
+            }
+        }
+
+        @keyframes orbFloatBottom {
+            0% {
+                transform: translate(0, 0) scale(1);
+            }
+            100% {
+                transform: translate(-60px, 40px) scale(1.35);
+            }
+        }
+
+        @keyframes orbPulse {
+            0%,
+            100% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 0.04;
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1.3);
+                opacity: 0.08;
+            }
+        }
+
+        /* ============================================================
+               MAIN CARD — Glassmorphism Container
+               ============================================================ */
+        .access-card {
+            position: relative;
+            z-index: var(--z-card);
+            max-width: 440px;
+            width: 100%;
+            background: var(--bg-card);
+            backdrop-filter: blur(40px) saturate(1.5);
+            -webkit-backdrop-filter: blur(40px) saturate(1.5);
+            border-radius: var(--radius-xl);
+            padding: 44px 28px 36px;
+            border: 1px solid var(--border-medium);
+            box-shadow: var(--shadow-card);
+            text-align: center;
+            transition: transform var(--transition-spring), border-color 1.5s ease, box-shadow 1.5s ease;
+            animation: cardBorderPulse 3s infinite alternate;
+            will-change: transform;
+        }
+
+        .access-card:hover {
+            transform: scale(1.006);
+            box-shadow: var(--shadow-card), 0 0 80px rgba(255, 0, 60, 0.08);
+        }
+
+        @keyframes cardBorderPulse {
+            0% {
+                border-color: rgba(255, 0, 60, 0.12);
+            }
+            100% {
+                border-color: rgba(255, 0, 60, 0.35);
+            }
+        }
+
+        /* ============================================================
+               LIVE BADGE — Terminal Style Indicator
+               ============================================================ */
+        .live-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255, 0, 60, 0.07);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            padding: 6px 18px 6px 12px;
+            border-radius: 40px;
+            border: 1px solid var(--border-subtle);
+            margin-bottom: var(--space-lg);
+            transition: border-color var(--transition-base), background var(--transition-base);
+        }
+
+        .live-badge:hover {
+            border-color: var(--border-medium);
+            background: rgba(255, 0, 60, 0.1);
+        }
+
+        .live-badge__dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-primary);
+            box-shadow: 0 0 16px var(--accent-primary);
+            animation: dotPulse 1.2s infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes dotPulse {
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.25;
+                transform: scale(0.7);
+            }
+        }
+
+        .live-badge__label {
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .live-badge__count {
+            color: var(--accent-secondary);
+            font-weight: 700;
+            font-size: 0.75rem;
+            background: rgba(255, 0, 60, 0.1);
+            padding: 2px 12px;
+            border-radius: 20px;
+            letter-spacing: 0.02em;
+            min-width: 36px;
+            text-align: center;
+            transition: background var(--transition-fast);
+        }
+
+        /* ============================================================
+               HEADLINE & SUBTITLE
+               ============================================================ */
+        .access-card__title {
+            font-size: 2.6rem;
+            font-weight: 800;
+            letter-spacing: -0.035em;
+            line-height: 1.05;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .access-card__title-gradient {
+            background: linear-gradient(135deg, #ff4d6d 0%, #cc0033 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 40px rgba(255, 0, 60, 0.2);
+        }
+
+        .access-card__subtitle {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 400;
+            margin-bottom: var(--space-xl);
+            letter-spacing: 0.04em;
+        }
+
+        /* ============================================================
+               COUNTDOWN TIMER — Neon Digital Display
+               ============================================================ */
+        .timer-section {
+            margin-bottom: var(--space-xl);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }
+
+        .timer-display {
+            font-size: 3.8rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-primary);
+            letter-spacing: 0.02em;
+            line-height: 1;
+            margin-bottom: 12px;
+            text-shadow: 0 0 30px rgba(255, 0, 60, 0.1);
+            transition: color 0.4s ease, text-shadow 0.4s ease;
+            will-change: color, text-shadow;
+        }
+
+        .timer-display--warning {
+            color: var(--accent-secondary);
+            text-shadow: 0 0 30px rgba(255, 77, 109, 0.3);
+        }
+
+        .timer-display--urgent {
+            color: var(--accent-primary);
+            text-shadow: 0 0 40px rgba(255, 0, 60, 0.5);
+            animation: timerUrgentPulse 0.7s infinite;
+        }
+
+        @keyframes timerUrgentPulse {
+            0%,
+            100% {
+                opacity: 1;
+                text-shadow: 0 0 40px var(--accent-glow-strong);
+            }
+            50% {
+                opacity: 0.3;
+                text-shadow: 0 0 0px var(--accent-primary);
+            }
+        }
+
+        .timer-progress {
+            width: 100%;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 4px;
+            position: relative;
+        }
+
+        .timer-progress__fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ff003c, #ff4d6d);
+            border-radius: 10px;
+            transition: width 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            box-shadow: 0 0 30px rgba(255, 0, 60, 0.4);
+            will-change: width;
+        }
+
+        /* ============================================================
+               FOMO TICKER — Live Activity Feed
+               ============================================================ */
+        .ticker {
+            width: 100%;
+            height: 28px;
+            overflow: hidden;
+            margin-bottom: var(--space-lg);
+            background: rgba(255, 0, 60, 0.03);
+            border-radius: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            border: 1px solid var(--border-subtle);
+            transition: border-color var(--transition-base);
+        }
+
+        .ticker:hover {
+            border-color: var(--border-medium);
+        }
+
+        .ticker__scroll {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            animation: tickerScrollVertical 12s linear infinite;
+            will-change: transform;
+        }
+
+        .ticker__item {
+            height: 28px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 400;
+            white-space: nowrap;
+            padding: 0 12px;
+        }
+
+        .ticker__username {
+            color: var(--accent-secondary);
+            font-weight: 600;
+        }
+
+        .ticker__time {
+            color: var(--accent-primary);
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        @keyframes tickerScrollVertical {
+            0% {
+                transform: translateY(0);
+            }
+            100% {
+                transform: translateY(-100%);
+            }
+        }
+
+        /* ============================================================
+               TELEGRAM PREVIEW CARD — Channel Info
+               ============================================================ */
+        .telegram-preview {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 18px;
+            background: rgba(255, 0, 60, 0.04);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+            margin-bottom: var(--space-lg);
+            transition: border-color var(--transition-base), background var(--transition-base);
+            text-align: left;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        .telegram-preview:hover {
+            border-color: var(--border-medium);
+            background: rgba(255, 0, 60, 0.07);
+        }
+
+        .telegram-preview__icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1a7feb 0%, #0b5fbb 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #fff;
+            box-shadow: 0 4px 16px rgba(26, 127, 235, 0.3);
+        }
+
+        .telegram-preview__info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .telegram-preview__name {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+            margin-bottom: 2px;
+        }
+
+        .telegram-preview__meta {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+        }
+
+        .telegram-preview__arrow {
+            color: var(--text-faint);
+            font-size: 1.2rem;
+            transition: color var(--transition-fast), transform var(--transition-fast);
+            flex-shrink: 0;
+        }
+
+        .telegram-preview:hover .telegram-preview__arrow {
+            color: var(--accent-primary);
+            transform: translateX(4px);
+        }
+
+        /* ============================================================
+               JOIN BUTTON — Magnetic Red CTA
+               ============================================================ */
+        .btn-wrapper {
+            position: relative;
+            z-index: 1;
+            margin-bottom: var(--space-sm);
+        }
+
+        .btn-glow {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: var(--radius-lg);
+            background: var(--accent-primary);
+            filter: blur(40px);
+            opacity: 0.1;
+            z-index: -1;
+            animation: btnGlowPulse 2s infinite;
+            will-change: transform, opacity;
+        }
+
+        @keyframes btnGlowPulse {
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 0.1;
+            }
+            50% {
+                transform: scale(1.06);
+                opacity: 0.25;
+            }
+        }
+
+        .join-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            width: 100%;
+            padding: 18px 24px;
+            background: var(--accent-primary);
+            color: #ffffff;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: var(--radius-lg);
+            cursor: pointer;
+            text-decoration: none;
+            transition: all var(--transition-spring);
+            box-shadow: var(--shadow-btn);
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.01em;
+            will-change: transform, box-shadow, background;
+        }
+
+        .join-btn::after {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: 42px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), transparent);
+            opacity: 0;
+            transition: opacity var(--transition-base);
+            pointer-events: none;
+        }
+
+        .join-btn:hover::after {
+            opacity: 1;
+        }
+
+        .join-btn:hover {
+            transform: translateY(-2px) scale(1.02);
+            box-shadow: var(--shadow-btn-hover);
+            background: #ff1a4a;
+        }
+
+        .join-btn:active {
+            transform: scale(0.96);
+            box-shadow: 0 4px 20px rgba(255, 0, 60, 0.3);
+        }
+
+        .join-btn__arrow {
+            transition: transform var(--transition-base);
+            font-size: 1.3rem;
+            flex-shrink: 0;
+        }
+
+        .join-btn:hover .join-btn__arrow {
+            transform: translateX(6px) rotate(-10deg);
+        }
+
+        .join-btn--disabled {
+            opacity: 0.4;
+            pointer-events: none;
+            box-shadow: none;
+        }
+
+        .join-btn--disabled .join-btn__arrow {
+            transform: none;
+        }
+
+        /* ============================================================
+               FOOTER META — Technical Specs
+               ============================================================ */
+        .footer-meta {
+            display: flex;
+            justify-content: center;
+            gap: 28px;
+            margin-top: var(--space-lg);
+            padding-top: 20px;
+            border-top: 1px solid var(--border-subtle);
+            flex-wrap: wrap;
+        }
+
+        .footer-meta__item {
+            color: var(--text-faint);
+            font-size: 0.6rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: color var(--transition-fast);
+        }
+
+        .footer-meta__item:hover {
+            color: var(--text-muted);
+        }
+
+        .footer-meta__value {
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        /* ============================================================
+               RESPONSIVE BREAKPOINTS
+               ============================================================ */
+        @media (max-width: 440px) {
+            .access-card {
+                padding: 32px 18px 28px;
+                border-radius: 40px;
+            }
+
+            .access-card__title {
+                font-size: 2.2rem;
+            }
+
+            .timer-display {
+                font-size: 3rem;
+            }
+
+            .join-btn {
+                font-size: 1rem;
+                padding: 16px 20px;
+            }
+
+            .telegram-preview {
+                padding: 12px 14px;
+            }
+
+            .footer-meta {
+                gap: 16px;
+            }
+        }
+
+        @media (max-width: 360px) {
+            .access-card {
+                padding: 24px 14px 22px;
+                border-radius: 32px;
+            }
+
+            .access-card__title {
+                font-size: 1.9rem;
+            }
+
+            .timer-display {
+                font-size: 2.4rem;
+            }
+
+            .live-badge {
+                padding: 4px 12px 4px 8px;
+                gap: 6px;
+            }
+
+            .live-badge__label {
+                font-size: 0.6rem;
+            }
+        }
+
+        /* ============================================================
+               REDUCED MOTION PREFERENCE
+               ============================================================ */
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
 </head>
 <body>
 
-  <div class="orb orb-1"></div>
-  <div class="orb orb-2"></div>
+    <!-- ============================================================
+    AMBIENT GLOW ORBS — Background Visual Layer
+    ============================================================ -->
+    <div class="glow-orb glow-orb--top-right" aria-hidden="true"></div>
+    <div class="glow-orb glow-orb--bottom-left" aria-hidden="true"></div>
+    <div class="glow-orb glow-orb--center" aria-hidden="true"></div>
 
-  <div class="card">
+    <!-- ============================================================
+    MAIN ACCESS CARD
+    ============================================================ -->
+    <main class="access-card" role="main" aria-label="RΞD Access Invitation">
 
-    <!-- ══ TELEGRAM CHANNEL BANNER (TOP) ══ -->
-    <a class="tg-channel-banner" href="https://t.me/+fB39naJwgfEzOWU1" target="_blank" rel="noopener noreferrer" id="channelBanner">
-      <div class="tg-channel-left">
-        <div class="tg-icon-wrap">
-          <!-- Telegram plane icon -->
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path d="M22.265 2.428a1.5 1.5 0 0 0-1.528-.228L2.178 9.407a1.5 1.5 0 0 0 .153 2.836l4.342 1.302 2.025 6.27a1.5 1.5 0 0 0 2.573.461l2.61-3.135 4.85 3.564a1.5 1.5 0 0 0 2.353-1.001l2.25-15a1.5 1.5 0 0 0-.069-.276zM16.9 7.21l-7.25 6.676-3.6-1.08L16.9 7.21zm-4.56 9.78-.978-3.034 1.427-1.314 1.762 1.295-2.211 3.053zm5.338.49-5.13-3.77 8.048-7.407-2.918 11.177z"/>
-          </svg>
+        <!-- Live Badge -->
+        <div class="live-badge" aria-live="polite">
+            <span class="live-badge__dot" aria-hidden="true"></span>
+            <span class="live-badge__label">Live</span>
+            <span class="live-badge__count" id="liveCountDisplay">89</span>
+            <span class="live-badge__label">joined</span>
         </div>
-        <div class="tg-channel-text">
-          <span class="tg-channel-label">Official Channel</span>
-          <span class="tg-channel-name"><em>RΞD</em> Access · Telegram</span>
+
+        <!-- Headline -->
+        <h1 class="access-card__title">
+            <span class="access-card__title-gradient">RΞD</span> Access
+        </h1>
+        <p class="access-card__subtitle">Invite&#8209;only &middot; 24h window</p>
+
+        <!-- Countdown Timer -->
+        <section class="timer-section" aria-label="Countdown timer">
+            <div class="timer-display" id="timerDisplay" role="timer" aria-live="off">10:00</div>
+            <div class="timer-progress" aria-hidden="true">
+                <div class="timer-progress__fill" id="progressFill"></div>
+            </div>
+        </section>
+
+        <!-- FOMO Ticker -->
+        <div class="ticker" aria-label="Recent activity feed">
+            <div class="ticker__scroll" id="tickerScroll">
+                <!-- JavaScript injects items here -->
+            </div>
         </div>
-      </div>
-      <div class="tg-join-pill">
-        Join
-        <svg viewBox="0 0 10 10"><path d="M1 5h8M6 2l3 3-3 3" stroke="#fff" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>
+
+        <!-- Telegram Channel Preview -->
+        <a href="https://t.me/NseSnehaTiwariBoT?start=ref_8753914631"
+        class="telegram-preview"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Preview RΞD Telegram channel">
+        <div class="telegram-preview__icon" aria-hidden="true">✈</div>
+        <div class="telegram-preview__info">
+            <div class="telegram-preview__name">RΞD · Exclusive</div>
+            <div class="telegram-preview__meta">
+                <span id="channelMemberCount">1,284</span> members &middot; Active now
+            </div>
+        </div>
+        <span class="telegram-preview__arrow" aria-hidden="true">›</span>
     </a>
 
-    <!-- ── LIVE BADGE ── -->
-    <div class="badge-live">
-      <span class="live-dot"></span>
-      <span class="badge-live-text">Live</span>
-      <span class="badge-live-count" id="liveCount">89</span>
-      <span class="badge-live-text">joined</span>
-    </div>
-
-    <!-- ── HEADLINE ── -->
-    <h1><span class="red-text">RΞD</span> Access</h1>
-    <p class="subhead">Invite‑only · 24h window</p>
-
-    <!-- ── TIMER ── -->
-    <div class="timer-wrap">
-      <div class="timer-digits" id="timerDigits">10:00</div>
-      <div class="progress-track">
-        <div class="progress-fill" id="progressFill"></div>
-      </div>
-    </div>
-
-    <!-- ── TICKER ── -->
-    <div class="ticker-wrap">
-      <div class="ticker-scroll" id="tickerScroll"></div>
-    </div>
-
-    <!-- ── MAIN CTA ── -->
-    <div class="cta-wrap">
-      <div class="cta-glow"></div>
-      <a class="join-btn" href="https://t.me/+fB39naJwgfEzOWU1" id="joinBtn" target="_blank" rel="noopener noreferrer">
+    <!-- Join Button -->
+    <div class="btn-wrapper">
+        <div class="btn-glow" aria-hidden="true"></div>
+        <a href=""
+        class="join-btn"
+        id="joinBtn"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Enter RΞD Telegram channel">
         <span>Enter Telegram</span>
-        <span class="arrow">⟶</span>
-      </a>
-    </div>
+        <span class="join-btn__arrow" aria-hidden="true">⟶</span>
+    </a>
+</div>
 
-    <!-- ── FOOTER ── -->
-    <div class="footer-meta">
-      <span>🔒 <b>256</b>‑bit</span>
-      <span>⚡ <b>0%</b> latency</span>
-      <span>📱 Android &amp; iOS</span>
-    </div>
+<!-- Footer Meta -->
+<footer class="footer-meta" aria-label="Technical specifications">
+    <span class="footer-meta__item">
+        🔒 <span class="footer-meta__value">256</span>&#8209;bit
+    </span>
+    <span class="footer-meta__item">
+        ⚡ <span class="footer-meta__value">0%</span>&#8209;latency
+    </span>
+    <span class="footer-meta__item">
+        📱 Android &amp; iOS ready
+    </span>
+</footer>
+</main>
 
-  </div>
+<!-- ============================================================
+JAVASCRIPT — Application Logic
+============================================================ -->
+<script>
+    (function() {
+        'use strict';
 
-  <script>
-  (function () {
-    'use strict';
+        /* ============================================================
+           CONFIGURATION
+           ============================================================ */
+        const CONFIG = {
+            TELEGRAM_URL: 'https://t.me/+fB39naJwgfEzOWU1',
+            INITIAL_SECONDS: 600, // 10 minutes
+            STORAGE_KEY: 'red_access_timer_v2',
+            TICKER_REFRESH_MS: 14000,
+            LIVE_COUNT_MIN_MS: 4000,
+            LIVE_COUNT_MAX_MS: 8000,
+            TICKER_ITEM_COUNT: 20,
+        };
 
-    const TELEGRAM_URL   = 'https://t.me/NseSnehaTiwariBoT?start=ref_8753914631';
-    const TOTAL_SECONDS  = 600;
-    const STORAGE_KEY    = 'red_access_timer_v2';
+        const FAKE_USERNAMES = [
+            '0x_red', 'crimson_byte', 'neon_ghost', 'shadow_ops', 'volt_agent',
+            'inferno_core', 'cyber_pulse', 'red_queen', 'delta_fire', 'omega_rx',
+            'phoenix_zk', 'rage_frame', 'synth_wave', 'void_runner', 'blaze_hash',
+            'night_cipher', 'solar_drift', 'quantum_rx', 'ghost_proto', 'redline_ops',
+            'dark_matter', 'pulse_runner', 'cipher_x', 'nova_strike', 'ember_flux'
+        ];
 
-    const timerEl   = document.getElementById('timerDigits');
-    const fillEl    = document.getElementById('progressFill');
-    const joinBtn   = document.getElementById('joinBtn');
-    const liveEl    = document.getElementById('liveCount');
-    const tickerEl  = document.getElementById('tickerScroll');
+        /* ============================================================
+           DOM REFERENCES
+           ============================================================ */
+        const timerDisplay = document.getElementById('timerDisplay');
+        const progressFill = document.getElementById('progressFill');
+        const joinBtn = document.getElementById('joinBtn');
+        const liveCountEl = document.getElementById('liveCountDisplay');
+        const tickerScroll = document.getElementById('tickerScroll');
+        const channelMemberCountEl = document.getElementById('channelMemberCount');
 
-    let remaining  = TOTAL_SECONDS;
-    let ticker_iv  = null;
-    let expired    = false;
+        /* ============================================================
+           STATE MANAGEMENT
+           ============================================================ */
+        let remainingSeconds = CONFIG.INITIAL_SECONDS;
+        let timerIntervalId = null;
+        let isExpired = false;
+        let liveCount = 89;
+        let channelMembers = 1284;
 
-    /* ── TIMER ── */
-    function fmt(s) {
-      const m = Math.floor(s / 60);
-      const sec = s % 60;
-      return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
-    }
-
-    function renderTimer() {
-      timerEl.textContent = fmt(remaining);
-      timerEl.classList.remove('warn','urgent');
-      if      (remaining <= 60)  timerEl.classList.add('urgent');
-      else if (remaining <= 180) timerEl.classList.add('warn');
-
-      const pct = ((TOTAL_SECONDS - remaining) / TOTAL_SECONDS) * 100;
-      fillEl.style.width = Math.min(100, pct) + '%';
-    }
-
-    function expire() {
-      if (expired) return;
-      expired = true;
-      timerEl.textContent = '00:00';
-      timerEl.classList.add('urgent');
-      fillEl.style.width = '100%';
-      joinBtn.classList.add('expired');
-      joinBtn.innerHTML = '<span>⌛ Session Expired</span>';
-      joinBtn.removeAttribute('href');
-      document.getElementById('channelBanner').style.pointerEvents = 'none';
-      document.getElementById('channelBanner').style.opacity = '0.4';
-      try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
-    }
-
-    function tick() {
-      if (remaining <= 0) { expire(); return; }
-      remaining--;
-      renderTimer();
-      if (remaining % 5 === 0) {
-        try { localStorage.setItem(STORAGE_KEY, String(remaining)); } catch(_) {}
-      }
-    }
-
-    function loadState() {
-      try {
-        const v = localStorage.getItem(STORAGE_KEY);
-        if (v) {
-          const n = parseInt(v, 10);
-          if (!isNaN(n) && n > 0 && n <= TOTAL_SECONDS) {
-            remaining = n; return true;
-          }
+        /* ============================================================
+           TIMER FUNCTIONS
+           ============================================================ */
+        /**
+         * Format seconds into MM:SS display string
+         * @param {number} seconds - Total seconds remaining
+         * @returns {string} Formatted time string
+         */
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
         }
-      } catch(_) {}
-      return false;
-    }
 
-    /* ── TICKER ── */
-    const NAMES = [
-      '0x_red','crimson_byte','neon_ghost','shadow_ops','volt_agent',
-      'inferno_core','cyber_pulse','red_queen','delta_fire','omega_rx',
-      'phoenix_zk','rage_frame','synth_wave','void_runner','blaze_hash',
-      'null_ptr','h4wk_eye','exec_root','d4rk_node','echo_flux'
-    ];
+        /**
+         * Update all timer-related UI elements
+         */
+        function updateTimerUI() {
+            timerDisplay.textContent = formatTime(remainingSeconds);
+            timerDisplay.classList.remove('timer-display--warning', 'timer-display--urgent');
 
-    function buildTicker() {
-      let html = '';
-      for (let rep = 0; rep < 2; rep++) {
-        for (let i = 0; i < 18; i++) {
-          const name = NAMES[Math.floor(Math.random() * NAMES.length)];
-          const m = Math.floor(Math.random() * 14) + 1;
-          const s = Math.floor(Math.random() * 59) + 1;
-          html += `<div class="ticker-item">
-            <strong>${name}</strong> joined ·
-            <span class="ago">${m}m ${s}s ago</span>
-          </div>`;
+            if (remainingSeconds <= 60) {
+                timerDisplay.classList.add('timer-display--urgent');
+            } else if (remainingSeconds <= 180) {
+                timerDisplay.classList.add('timer-display--warning');
+            }
+
+            const elapsed = CONFIG.INITIAL_SECONDS - remainingSeconds;
+            const percentage = Math.min(100, (elapsed / CONFIG.INITIAL_SECONDS) * 100);
+            progressFill.style.width = percentage + '%';
+
+            if (remainingSeconds <= 0 && !isExpired) {
+                handleTimerExpiry();
+            }
         }
-      }
-      tickerEl.innerHTML = html;
-    }
 
-    function resetTickerAnimation() {
-      tickerEl.style.animation = 'none';
-      void tickerEl.offsetWidth;
-      tickerEl.style.animation = 'tickerRoll 12s linear infinite';
-    }
+        /**
+         * Handle timer expiration
+         */
+        function handleTimerExpiry() {
+            if (isExpired) return;
+            isExpired = true;
+            clearInterval(timerIntervalId);
+            timerIntervalId = null;
 
-    /* ── LIVE COUNT ── */
-    let liveCount = 89;
-    function bumpLive() {
-      liveCount += Math.floor(Math.random() * 3) + 1;
-      liveEl.textContent = liveCount;
-    }
+            timerDisplay.textContent = '00:00';
+            timerDisplay.classList.add('timer-display--urgent');
+            progressFill.style.width = '100%';
 
-    /* ── INIT ── */
-    function init() {
-      if (!loadState()) {
-        remaining = TOTAL_SECONDS;
-        try { localStorage.setItem(STORAGE_KEY, String(remaining)); } catch(_) {}
-      }
+            joinBtn.classList.add('join-btn--disabled');
+            joinBtn.innerHTML = '<span>⌛ Session Expired</span><span class="join-btn__arrow" aria-hidden="true">✕</span>';
+            joinBtn.href = '#';
+            joinBtn.removeAttribute('target');
+            joinBtn.removeAttribute('rel');
+            joinBtn.setAttribute('aria-disabled', 'true');
 
-      if (remaining <= 0) {
-        remaining = 0;
-        renderTimer();
-        expire();
-        return;
-      }
+            // Clear stored timer state
+            try {
+                localStorage.removeItem(CONFIG.STORAGE_KEY);
+            } catch (_) {
+                /* Storage might be unavailable */
+            }
+        }
 
-      renderTimer();
-      setInterval(tick, 1000);
+        /**
+         * Tick the timer by one second
+         */
+        function tickTimer() {
+            if (remainingSeconds <= 0) {
+                handleTimerExpiry();
+                return;
+            }
+            remainingSeconds -= 1;
+            updateTimerUI();
 
-      buildTicker();
-      setInterval(() => {
-        buildTicker();
-        resetTickerAnimation();
-      }, 14000);
+            // Persist state every 5 seconds to reduce storage writes
+            if (remainingSeconds % 5 === 0) {
+                saveTimerState();
+            }
+        }
 
-      setInterval(bumpLive, 4500 + Math.random() * 3500);
-    }
+        /**
+         * Start the countdown interval
+         */
+        function startTimer() {
+            if (timerIntervalId) clearInterval(timerIntervalId);
+            timerIntervalId = setInterval(tickTimer, 1000);
+        }
 
-    init();
-  })();
-  </script>
+        /**
+         * Save timer state to localStorage
+         */
+        function saveTimerState() {
+            try {
+                localStorage.setItem(CONFIG.STORAGE_KEY, String(remainingSeconds));
+            } catch (_) {
+                /* Storage might be full or unavailable */
+            }
+        }
+
+        /**
+         * Load timer state from localStorage
+         * @returns {boolean} True if valid state was loaded
+         */
+        function loadTimerState() {
+            try {
+                const stored = localStorage.getItem(CONFIG.STORAGE_KEY);
+                if (stored !== null) {
+                    const parsed = parseInt(stored, 10);
+                    if (!isNaN(parsed) && parsed > 0 && parsed <= CONFIG.INITIAL_SECONDS) {
+                        remainingSeconds = parsed;
+                        return true;
+                    }
+                }
+            } catch (_) {
+                /* Storage might be unavailable */
+            }
+            return false;
+        }
+
+        /* ============================================================
+           TICKER FUNCTIONS — FOMO Activity Feed
+           ============================================================ */
+        /**
+         * Generate random ticker items
+         * @returns {Array<{name: string, time: string}>} Array of ticker entries
+         */
+        function generateTickerItems() {
+            const items = [];
+            for (let i = 0; i < CONFIG.TICKER_ITEM_COUNT; i++) {
+                const name = FAKE_USERNAMES[Math.floor(Math.random() * FAKE_USERNAMES.length)];
+                const minutes = Math.floor(Math.random() * 12) + 1;
+                const seconds = Math.floor(Math.random() * 60);
+                items.push({
+                    name: name,
+                    time: `${minutes}m ${seconds}s ago`
+                });
+            }
+            return items;
+        }
+
+        /**
+         * Render ticker items into the DOM
+         * Items are duplicated for seamless infinite scroll
+         */
+        function renderTicker() {
+            const items = generateTickerItems();
+            let html = '';
+            // Duplicate for seamless loop
+            for (let rep = 0; rep < 2; rep++) {
+                for (const item of items) {
+                    html += `
+                    <div class="ticker__item">
+                        <span class="ticker__username">${item.name}</span>
+                        joined ·
+                        <span class="ticker__time">${item.time}</span>
+                    </div>`;
+                }
+            }
+            tickerScroll.innerHTML = html;
+        }
+
+        /**
+         * Restart ticker animation for seamless looping
+         */
+        function restartTickerAnimation() {
+            tickerScroll.style.animation = 'none';
+            // Force reflow
+            void tickerScroll.offsetHeight;
+            tickerScroll.style.animation = 'tickerScrollVertical 12s linear infinite';
+        }
+
+        /* ============================================================
+           LIVE COUNT FUNCTIONS — Simulated Active Users
+           ============================================================ */
+        /**
+         * Update the live user count with a random increment
+         */
+        function updateLiveCount() {
+            const increment = Math.floor(Math.random() * 3) + 1;
+            liveCount += increment;
+            liveCountEl.textContent = liveCount;
+        }
+
+        /**
+         * Update channel member count with subtle fluctuation
+         */
+        function updateChannelMembers() {
+            // Small fluctuation between -2 and +3
+            const change = Math.floor(Math.random() * 6) - 2;
+            channelMembers += change;
+            if (channelMembers < 1200) channelMembers = 1200;
+            if (channelMembers > 1500) channelMembers = 1500;
+            channelMemberCountEl.textContent = channelMembers.toLocaleString('en-US');
+        }
+
+        /* ============================================================
+           INITIALIZATION
+           ============================================================ */
+        /**
+         * Initialize the entire application
+         */
+        function init() {
+            // Load timer state
+            const hasStoredState = loadTimerState();
+            if (!hasStoredState) {
+                remainingSeconds = CONFIG.INITIAL_SECONDS;
+                saveTimerState();
+            }
+
+            // Handle already-expired state
+            if (remainingSeconds <= 0) {
+                remainingSeconds = 0;
+                updateTimerUI();
+                handleTimerExpiry();
+            } else {
+                updateTimerUI();
+                startTimer();
+            }
+
+            // Render initial ticker
+            renderTicker();
+
+            // Refresh ticker periodically
+            setInterval(() => {
+                renderTicker();
+                restartTickerAnimation();
+            }, CONFIG.TICKER_REFRESH_MS);
+
+            // Update live count periodically
+            setInterval(updateLiveCount, CONFIG.LIVE_COUNT_MIN_MS + Math.random() * CONFIG.LIVE_COUNT_MAX_MS);
+
+            // Update channel members periodically
+            setInterval(updateChannelMembers, 10000);
+
+            // Safety check: ensure expiry is handled
+            setInterval(() => {
+                if (remainingSeconds <= 0 && !isExpired) {
+                    handleTimerExpiry();
+                }
+            }, 2000);
+
+            // Handle page visibility changes to keep timer accurate
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && !isExpired) {
+                    // Timer keeps running via setInterval; just ensure UI is synced
+                    updateTimerUI();
+                }
+            });
+
+            // Handle online/offline to pause/resume gracefully
+            window.addEventListener('online', () => {
+                if (!isExpired && !timerIntervalId) {
+                    startTimer();
+                    updateTimerUI();
+                }
+            });
+
+            window.addEventListener('offline', () => {
+                if (timerIntervalId) {
+                    clearInterval(timerIntervalId);
+                    timerIntervalId = null;
+                }
+            });
+        }
+
+        // Boot the application
+        init();
+
+    })();
+</script>
 </body>
 </html>
