@@ -80,6 +80,33 @@ ADMIN_IDS = {
     if x.strip().lstrip("-").isdigit()
 }
 
+# ============================================================
+# CLONE / MULTI-BOT ENVIRONMENT
+# ============================================================
+
+# Define these flags/paths BEFORE they are used by DB_PATH or any
+# startup logic below. Previously BROADCAST_MODE was referenced
+# before its definition, causing:
+# NameError: name 'BROADCAST_MODE' is not defined
+
+CLONE_MODE = os.getenv("CLONE_MODE", "0") == "1"
+BROADCAST_MODE = os.getenv("BROADCAST_MODE", "0") == "1"
+CLONE_DB_DIR = Path(os.getenv("CLONE_DB_DIR", "child_data"))
+CLONE_DB_DIR.mkdir(parents=True, exist_ok=True)
+
+try:
+    MAX_CLONES = max(1, int(os.getenv("MAX_CLONES", "50")))
+except (TypeError, ValueError):
+    MAX_CLONES = 50
+
+CLONE_PROCESSES = {}
+BROADCAST_DB_PATH = Path(
+    os.getenv(
+        "BROADCAST_DB_PATH",
+        str(CLONE_DB_DIR / "broadcast_bot.db"),
+    )
+)
+
 DB_PATH = Path(
     os.getenv("DATABASE_PATH", "bot_data.db")
 )
@@ -119,16 +146,6 @@ def decrypt_token(value):
 # ============================================================
 # CLONE / MULTI-BOT MANAGER
 # ============================================================
-CLONE_MODE = os.getenv("CLONE_MODE", "0") == "1"
-BROADCAST_MODE = os.getenv("BROADCAST_MODE", "0") == "1"
-CLONE_DB_DIR = Path(os.getenv("CLONE_DB_DIR", "child_data"))
-CLONE_DB_DIR.mkdir(parents=True, exist_ok=True)
-try:
-    MAX_CLONES = max(1, int(os.getenv("MAX_CLONES", "50")))
-except (TypeError, ValueError):
-    MAX_CLONES = 50
-CLONE_PROCESSES = {}
-BROADCAST_DB_PATH = Path(os.getenv("BROADCAST_DB_PATH", str(CLONE_DB_DIR / "broadcast_bot.db")))
 
 # Stable encryption key shared by the main/clone/broadcast child processes.
 # Prefer explicitly setting TOKEN_ENCRYPTION_KEY in Render. When absent, derive
